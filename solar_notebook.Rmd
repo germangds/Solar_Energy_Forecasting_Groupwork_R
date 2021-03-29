@@ -1,0 +1,736 @@
+---
+title: "Group Assignment PROGRAMMING - R MBD-EN-2020A-1"
+output: 
+  html_notebook: 
+    toc: yes
+    toc_float: yes
+    toc_collapsed: yes
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+In the following we explain the steps taken for the "PROGRAMMING R WORKGROUP PROJECT" of Group 2.1. 
+
+# Objectives {#obj}
+
+The objectives of the project are:  
+1. Explore, describe and analyze the data: For that we performed an EDA  
+2. Report findings from the EDA: For that we prepared this R Notebook  
+3. Train a ML model: For that we used available datasets and complemented it with data created by us    
+4. Make predictions and submit them to Kaggle: This objective is part of the one above.  
+
+# Problem definition {#problem}
+
+For this project we will work with a preprocessed dataset originating from the "AMS 2013-2014 Solar Energy Prediction Contest" [link](https://www.kaggle.com/c/ams-2014-solar-energy-prediction-contest/overview/evaluation). As described in kaggle, the objective of the contest is to "discover which statistical and machine learning techniques provide the best short term predictions of solar energy production." Contestants, it continues, "will predict the total daily incoming solar energy at 98 Oklahoma Mesonet sites, which will serve as "solar farms" for the contest." The datasets used for this project is explored below.
+
+# Libraries {#libraries}
+
+To accomplish all objectives we'll be utilizing the following libraries. Information about these libraries and material used in the development of this project please check [annex I](#annex-1) and [annex II](#annex-2), respectively. 
+
+```{r libraries, include=FALSE}
+
+# Loading libraries
+library(kableExtra)
+library(data.table)
+library(knitr)
+library(papeR)
+library(leaflet)
+library(corrplot)
+library(RColorBrewer)
+library(DataExplorer)
+library(ggplot2)
+library(scales)
+library(dlookr)
+library(gtable)
+library(grid)
+library(egg)
+library(gridExtra)
+library(factoextra)
+library(dplyr)
+library(caret)
+library(Amelia)
+library(tseries)
+library(forecast)
+library(FactoMineR)
+library(urca)
+```
+
+# EDA (part I) {#eda-1}
+
+## Datasets {#data}
+
+```{r loading-files, include=FALSE}
+# Loading all relevant files
+## creating path to folder - easy to change later
+folder_path <- "/Users/erivero/Documents/MBD\ IE/t1/R\ PROGRAMMING/group_assignment/project(1)/";
+## assigning to variable
+solar <- readRDS(file.path(folder_path,"solar_dataset.RData")); # created as dt
+stations <- as.data.table(read.csv(file.path(folder_path,"station_info.csv"))); # created as dt
+extra_vars <- readRDS(file.path(folder_path,"additional_variables.RData")); # created as dt
+```
+
+We were provided with three (3) datasets:  
+- `solar_dataset.RData`: This file contains relevant information from weather stations over solar irradiation.    
+- `station_info.csv`: This file contains relevant information over the localization of the weather stations.   
+- `additional_variables.RData`: This file contains numerical weather predictions (NWP) relevant to the period in observation.
+
+All this datasets have been loaded as `data.table` objects as shown below.  
+- class of **solar** object: `r class(solar)`.  
+- class of **stations** object: `r class(stations)`.  
+- class of **extra_vars** object: `r class(extra_vars)`.
+
+## Understanding the datasets {#understanding}
+
+### Solar irradiation data {#solar-data}
+
+This data is contained in the file `solar_dataset.RData`. Note that this file has been pre-processed, however, we do not have the steps taken for the pre-processing. Therefore, further information about the data within this file is limited. The data contained in this file will be used as is. 
+
+On the structure, the dataset has `r dim(solar)[1]` observations and `r dim(solar)[2]` variables. Each observation correspond to a day. The total period covered is 1994-01-01 to 2012-11-30. Daily incoming solar energy measurements, which are the values of interest, are provided from 1994-01-01 to 2007-12-31 (both included) for 98 weather stations. Each value refers to the total daily incoming solar energy in ($J/m^2$) at each site (weather station) measured every 5 minutes and summed from sunrise to 23:55 UTC. As stated in the [data description](https://www.kaggle.com/c/ams-2014-solar-energy-prediction-contest/data) section of the kaggle competition.
+From 2008-01-01 to 2012-11-30, however, these measurements were not provided with the objective to use the above described set to predict them. A high-level view of the structure is provided in the table below. For detailed statistical information see [this section](#exploration).
+
+|Column number|Column name|Data type|Interpretation|
+|---|---|---|---|
+|1|Date|Character|Day of interest|
+|2-99|Name of weather station|Integer|Real values of solar production recorded per day|
+|100-456|Weather predictors|Numeric|Variables created from different weather predictors given in the Kaggle competition as the result of a PCA|
+
+An extract of the file (first 5 rows) is shown below. The extract shows the first column of each type. That is, a variable for the date, one of the 98 variables for the weather station measurements and, one of the 357 variables for the results of a principal component analysis (PCA).
+
+```{r solar}
+head(solar)[1:5,c(1,2,100)] # displaying the first column of each type
+```
+
+
+```{r solar-irradiation}
+solar_irradiation <- solar[1:5113,1:99]; # real irradiation from 98 stations
+
+## casting to date
+solar_irradiation$Date <- as.Date.character(solar_irradiation$Date, format = c("%Y%m%d")); #casting variable to date format
+
+## casting to numeric
+vec_names_num <- colnames(solar_irradiation)[-1]; # excluding date column
+solar_irradiation[,(vec_names_num) := lapply(.SD, as.numeric), .SDcols = vec_names_num] # casting to numeric indexing by name
+```
+
+**NOTE**: We have created a data.table object `solar_irradiation` from `solar` (also a data.table) with the following modifications:  
+- Casting date column to date format and solar irradiation data (columns 2-99) to numeric,  
+- Dropping all PC columns and rows with NA.
+
+
+
+
+
+
+#### A time series data {#time-series}
+
+The solar irradiation data represents a time series of solar irradiation values measured at each Mesonet (weather station). The figure below shows the time series for one weather station (ACME). From the figure it can be appreciated the ups and downs (cycles) characteristic of solar irradiation.
+
+```{r ts-seasonality}
+time_series_mesonet <- ggplot(solar_irradiation, aes(x = solar_irradiation$Date, y = solar_irradiation$ACME))  + geom_line() 
+time_series_mesonet <- time_series_mesonet + labs(title = "Seasonality - full time series", 
+                                                  subtitle = "ACME mesonet", 
+                                                  caption = "source: solar_irradiation (dt)",
+                                                  x = "Date", 
+                                                  y = "Irradiation") 
+time_series_mesonet <- time_series_mesonet + theme(plot.title = element_text(color = "blue", size = "10", face = "bold", hjust = 0), 
+                                                   plot.subtitle = element_text(color = "black"), 
+                                                   plot.caption = element_text(color = "black", face = "italic"))  
+time_series_mesonet <- time_series_mesonet + scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "730 days")
+time_series_mesonet
+```
+
+In reality, these cycles happen during the day, where the peak is normally observed close to noon and the valleys showing at the beginning of the day (early morning) and at the end (late afternoon). The data we have represents the accumulated radiation per day per station. With this data we cannot observe the daily cycle but only the seasonal one. Indeed, solar irradiation also has seasonality.  
+
+The figure below shows the seasonal pattern embedded in the solar irradiation time series of the ACME weather station. The figure displays two years worth of observations (from 2000-01-01 to 2001-12-31). Note that a similar pattern is expected for the other 97 sites due to the data under study. A clear distinction between the daily and seasonal pattern is the duration of the cycle. The daily cycle can be measured in hours. In contrast, the seasonal cycle takes months. In general, this seasonal pattern shows its highest values during summer months and its lowest values during winter months. 
+
+
+```{r ts-seasonality-2-years}
+
+time_series_one_year_mesonet <- ggplot(solar_irradiation, aes(x = solar_irradiation$Date, y = solar_irradiation$ACME))  + geom_line() 
+time_series_one_year_mesonet <- time_series_one_year_mesonet + labs(title = "Seasonality - two years view", 
+                                                  subtitle = "ACME mesonet", 
+                                                  caption = "source: solar_irradiation (dt)",
+                                                  x = "Date", 
+                                                  y = "Irradiation") 
+time_series_one_year_mesonet <- time_series_one_year_mesonet + theme(plot.title = element_text(color = "blue", size = "10", face = "bold", hjust = 0), 
+                                                   plot.subtitle = element_text(color = "black"), 
+                                                   plot.caption = element_text(color = "black", face = "italic"),
+                                                   axis.text.x = element_text(angle = 25, vjust = 1, hjust = 1))  
+time_series_one_year_mesonet <- time_series_one_year_mesonet + scale_x_date(date_labels = "%Y-%m", 
+                                                          date_breaks = "3 month", 
+                                                          limits = as.Date(c("2000-01-01", "2001-12-31")))
+time_series_one_year_mesonet
+
+```
+
+
+This is a first assessment of the data. We will provide a more detailed study in [EDA (part II)](#eda-2). 
+
+
+
+
+
+
+### Station information data {#station-data}  
+
+Data about the location of each of the 98 weather stations is stored in the file `station_info.csv`. A high-level view of the structure is provided in the table below. For detailed statistical information see [this section](#exploration). 
+
+|Column number|Column name|Data type|Interpretation|
+|---|---|---|---|
+|1|stid|Character|Weather (Mesonet) station name|
+|2|nlat|Numeric|Latitude|
+|3|elon|Numeric|Longitud|
+|4|elev|Integer|Elevation in meter|
+
+**NOTE**: We have created a data.table object `solar_stations` from `stations` preserving the content from the original.
+
+An extract of the data (first 5 rows) is shown below.
+
+```{r solar-stations}
+solar_stations <- stations; # making a copy to work with
+head(solar_stations)[1:5,] # displaying the first column of each type
+```
+
+#### Finding clusters
+
+The elevation of mesonets could be used to cluster them. That is why, we looked closer to the elevation variable to see if clusters could be derived. From there we observed that there are 8 clusters in which mesonets could be grouped in terms of the elevation. The groups/clusters are shown below:
+
+```{r include=FALSE}
+#summary(solar_stations$elev) # get the summary
+bin_stations_elevation <- binning(solar_stations$elev, type = "kmeans") # create bin object
+#class(bin_stations_elevation) # object of class bin
+#labels(bin_stations_elevation) # labels that represent each mesonet
+#levels(bin_stations_elevation)
+
+```
+
+```{r}
+#levels(bin_stations_elevation) # clusters
+plot(bin_stations_elevation) # plots the density and the frequency
+```
+
+
+We reserve this information for a potential use later in the study.
+
+
+
+
+
+
+#### Mapping weather stations {#mapping-stations}
+
+The map below displays the 98 weather stations (Mesonets) in Oklahoma.
+
+```{r mapping-stations}
+#steps
+colnames(solar_stations) <- c("stid", "lat", "lng", "elev") # modify names for auto recognition by leaflet package
+
+mesonets <- leaflet() %>%
+        addTiles() %>%  # Add default OpenStreetMap map tiles
+        addMarkers(lng=solar_stations$lng, lat=solar_stations$lat, popup=solar_stations$stid)
+mesonets  # Print the map
+
+```
+
+
+
+
+### Numeric weather predictions (NWP)  {#NWP}
+
+The file `additional_variables.RData` contains 100 weather predictions for each day. According to the explanation in kaggle, the numerical weather prediction data (NWP) "comes from the NOAA/ESRL Global Ensemble Forecast System (GEFS) Reforecast Version 2." This data, it continues, "include all 11 ensemble members and the forecast timesteps 12, 15, 18, 21, and 24." A high-level view of the structure is provided in the table below. For detailed statistical information see [this section](#exploration).
+
+|Column number|Column name|Data type|Interpretation|
+|---|---|---|---|
+|1|Date|Character|Date of interest|
+|2-101|V...|Numeric|NWP|
+
+**NOTE**: We have created a data.table object `solar_extra` from `extra_vars` casting only the date column to date format.
+
+An extract of the data (first 5 rows and columns) is shown below.
+
+```{r solar-extra}
+solar_extra <- extra_vars; # making a copy to work with
+
+## casting to date
+solar_extra$Date <- as.Date.character(solar_extra$Date, format = c("%Y%m%d")); #casting variable to date format
+
+head(solar_extra)[1:5,1:5] # displaying first 5 rows and columns
+```
+
+
+
+## Exploring datasets {#exploration}
+
+In this section we explore the datasets by observing existing data types, data completeness and performing univariate and multivariate analysis. 
+
+### Data types {#data-types}
+
+As explained briefly in the **Notes** above, we have already explore the data. From our first exploration we observed the following:  
+- Some data types were not in the correct format: This is the case for date and solar irradiation variables,
+- All solar irradiation time series have missing data (NA): "missing" values for each variable amounts to 26%.
+
+The first observation was tackled by reformatting these variables to the correct data types. As shown in the table below.
+
+|Source|Variable name|Variable type (original)|Variable type (corrected)|
+|---|---|---|---|
+|`solar_dataset.RData`|Date|Character|Date|
+|`solar_dataset.RData`|Solar irradiation (cols 2-99)|Integer|Numeric|
+|`additional_variables.RData`|Date|Character|Date|
+
+Note that we have preserved the original data (we believe this is a good practice). Therefore, to make all modifications explained above we created three new objects (of type data.table as hinted in the notes). 
+
+The structure of these three objects is highlighted below. For consistency and readability purposes, we are only showing an extract of the data. Relevant statistics are shown in [this section](#exploration).
+
+**solar_irradiation (data.table)**
+```{r}
+
+str(solar_irradiation[1:5,1:5])
+
+```
+
+**solar_stations (data.table)**
+```{r}
+
+str(solar_stations)
+
+```
+
+**solar_extra (data.table)**
+```{r}
+
+str(solar_extra[1:5,1:5])
+
+```
+
+These objects will be used for the rest of the analysis.
+
+The second observation needs no action. The part of the series that have NA needs to be predicted. Therefore, values for this part of the series will be estimated in the training and prediction sections.
+
+
+
+
+
+### Data completeness {#data-completeness}
+
+Looking at the [original datasets](#data), two datasets have missing values. The `solar_dataset.RData` has 1796 "missing" values per variable. That is, 26% of the total 6909 observations are missing for each weather station. In contrast, the ratio of missing values for the `additional_variables.RData` dataset can be separated into two groups according to the percent of data missing as illustrated in the figures below.
+
+```{r plots-missing}
+## using ggplot, DataExplorer and grid
+p1 <- plot_missing(solar_extra[,2:25], 
+                   group = list("less_5%" = 0.05, "between_5_10%" = 0.1, "above_10%" = 1), 
+                   geom_label_args = list("size" = 2, "label.padding" = unit(0.1, "lines"))) 
+p2 <- plot_missing(solar_extra[,26:50], 
+                   group = list("less_5%" = 0.05, "between_5_10%" = 0.1, "above_10%" = 1),
+                   geom_label_args = list("size" = 2, "label.padding" = unit(0.1, "lines")))
+p3 <- plot_missing(solar_extra[,51:75], 
+                   group = list("less_5%" = 0.05, "between_5_10%" = 0.1, "above_10%" = 1),
+                   geom_label_args = list("size" = 2, "label.padding" = unit(0.1, "lines")))
+p4 <- plot_missing(solar_extra[,76:101], 
+                   group = list("less_5%" = 0.05, "between_5_10%" = 0.1, "above_10%" = 1),
+                   geom_label_args = list("size" = 2, "label.padding" = unit(0.1, "lines")))
+#grid.arrange(p1,p2,p3,p4, nrow = 2)
+```
+
+Now, we implement a missing plot to get different view of the amount of missing data across our dataset. From the left to the right of the figure below, we observe the ratio of missing data (displayed in the y axis in red) for our attributes (displayed in the x axis). Note that the attributes with the highest ratio of missing data are observed on the left of the figure.
+
+
+```{r missing-map, echo=FALSE, message=FALSE, warning=FALSE}
+missmap(solar_extra[,-1], 
+        col = c("red", "grey"), 
+        x.cex = 0.5,
+        y.cex = 0.5,
+        legend = FALSE)
+```
+
+We reserve this information for a potential use later in the study.
+
+
+### Univariate analysis {#univariate}
+
+In this section we aim at learning about the central tendency, distribution and spread of data. Relevant statistics to observe the central tendency are described below.
+
+The table below shows relevant statistics for values corresponding to solar irradiation measurements from all weather stations. 
+
+```{r describe-solar-irradiation}
+describe(solar_irradiation) # descriptive statistics using dlookr
+```
+
+
+### Univariate visualization {#univariate-viz}
+
+To look at the distribution of the data, we used a boxplot. This visualization allows us to display relevant statistics of all 98 variables in one plot. As a reminder, the box captures the middle 50% of the data (from Q1 to Q3). The median is represented by the horizontal line in the box. The whiskers (lines with a T-shape) provides an idea of the dispersion of the data. Data points observed outside these lines, if any, may require further exploration to determine if these points may be consider as outliers.
+
+From the figure below, we observe that most variables are within the same range. The highest and lowest value found in the dataset are highlighted by the blue and green lines, respectively. The red line illustrates the mean of the 98 weather stations. The upper whisker observed for the IDAB weather station is driven by the highest value found in the dataset. This value being `r max(solar_irradiation$IDAB)`. 
+
+```{r boxplot-all}
+# a first boxplot to get a sense of the distributions of solar irradiation
+boxplot(solar_irradiation[,-1]) # boxplot of all 98 stations
+abline(h = sample_mean, col = "red")
+abline(h = sample_min, col = "green")
+abline(h = sample_max, col = "blue")
+```
+
+### Finding outliers
+
+Based on the boxplot above, we observe that the weather station IDAB has a higher length of wiskers. Therefore, we believe it is worthwhile to focus on this distribution to see if within our dataset `solar_irradiation` outliers exist. As a first step, lets visually analyse this series by means of a boxplot (see below). 
+
+```{r boxplot-IDAB}
+boxplot(solar_irradiation$IDAB) # boxplot of IDAB
+```
+
+After a close examination, we do not observe aspects out of the ordinary. But, lets say that we are still skeptical. Therefore, as a second step, lets look into the whole dataset with a different method. With the help of the function `diagnose_outlier` in the `dlookr` library we obtain a diagnosis of our numerical data. For information about this library please refer to the [annex I](#annex-1). 
+
+```{r diagnose-outliers}
+diag_outliers <- diagnose_outlier(solar_irradiation)
+diag_outliers
+```
+Basically, from the table we observe that there are `r sum(diag_outliers$outliers_cnt)` outliers. We beleive this provides sufficient prove that our dataset shows no signs of outliers.    
+
+### Normality test
+
+In the following, we apply a normality test. From our exploration we found that all our variables show a normal distribution. To exemplify this, we present below the distributions that are at the two boundaries of the spectrum. That is, SALL and KENT.
+
+```{r normality-test, include=FALSE}
+normality_solar_irradiation <-  normality(solar_irradiation)
+
+normality_solar_irradiation %>% 
+  filter(p_value >= 0.05) %>% 
+    arrange(desc(p_value))
+```
+
+```{r normality-test-lowest-pvalue, include=FALSE}
+normality_solar_irradiation %>% 
+  filter(p_value <= 0.05) %>% 
+    arrange(abs(p_value))
+```
+
+```{r normality-test-highest-pvalue, include=FALSE}
+normality_solar_irradiation %>% 
+  filter(p_value <= 0.05) %>% 
+    arrange(desc(p_value))
+```
+
+```{r}
+plot_normality(solar_irradiation, c("SALL", "KENT"))
+```
+
+
+
+### Multivariate analysis {#multivariate}
+
+Below we display the correlation matrix.
+
+```{r corr-matrix}
+correlations <- cor(solar_irradiation[,-1]);
+kbl(round(correlations, 3)) %>% 
+  #scroll_box(width = "650px", height = "500px") %>% 
+  scroll_box(width = "300%", height = "500px") %>% 
+  kable_classic_2("hover", full_width = F, html_font = "sans")
+```
+
+From the matrix above we observe that pairs of variables show a high correlation. Looking at each pair with the help of the `dlookr` package, we observe that a large set of pairs have a correlation above abs(0.75). This is confirmed by the correlation plot presented in the next section.
+
+```{r}
+correlation1 <- compare_numeric(solar_irradiation)
+correlation1 %>% "$"(correlation) %>% filter(abs(coef_corr) > 0.75)
+```
+
+### Multivariate visualization {#multivariate-viz}
+
+
+```{r corr-plot}
+col_color = brewer.pal(n=8, name="RdYlBu") # defining the color scheme
+corrplot(solar_corr, method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         col = col_color, 
+         tl.cex = 0.3) # observations: all are positive; most strong (>= 0.75)
+```
+
+
+## Dimensionality reduction {#dim-reduction}
+
+### Principal component analysis {#PCA}
+
+As described in [this blog](https://towardsdatascience.com/tidying-up-with-pca-an-introduction-to-principal-components-analysis-f876599af383), the goal of PCA is to identify patterns in a data set, and then distill the variables down to their most important features so that the data is simplified without losing important traits. PCA asks if all the dimensions of a data set spark joy and then gives the user the option to eliminate ones that do not.
+
+The main purpose of using this method in our EDA is to implement a more robust implementation of singular value decomposition(SVD). This aids us with data reduction or minimizing the noise within our dataset. This is done by compiling all observations and variables to find within a coordinate axis the different components to project the best fit. 
+
+First, we compute the PCs and visualize eigenvalues (scree plot shown below). The figure below shows the percentage of variances explained by each principal component and helps us to determine the number of components to use. 
+
+
+```{r pca-screeplot}
+
+mypr <- prcomp(solar_irradiation[,-1], scale=TRUE)
+#abline(h = 0.05, col="red", lty=2)
+
+fviz_eig(mypr) 
+#abline(h = 0.05, col="red")
+
+```
+
+The summary is presented below.
+
+```{r pca-alternative}
+pca_2 <- PCA(solar_irradiation[,-1], graph = FALSE) # using FactoMineR
+head(pca_2$eig)
+```
+
+As we saw in the scree plot, the percentage of variances explained by the principal component number 1, is very high for PC1 (84% approx.). 
+
+Given that we can explain 93,7% of all the points with 4 different PC, we will focus on the first 4 PC. These 4 principal components factors have to be retained in the exploratory factor analysis. 
+
+Some graphic representation to visualize the behavior of these variables and observations are presented below. In this case, we are putting the PC2 in the Y axis and the PC1 in the X axis.  With this we see the different signs (+/-) in terms of rotation per principal component.
+
+```{r pca-contrib}
+
+fviz_pca_ind(mypr, col.ind = "cos2", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+fviz_pca_var(mypr, col.var = "contrib", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),repel = TRUE)
+
+```
+
+From the circle of correlations (second graph) we observe that all variables seem to be positively correlated with PC1, however for PC2, there is a 50/50 distribution between the variables. 
+
+
+
+
+
+
+# EDA (part II) {#eda-2}
+
+As briefly commented in the first part of this [EDA](#eda-1) our data (`solar_irradiation`) is form of a set of time series. In the following, we will present an EDA for this data.
+
+## Data classes
+
+Our data is of class `numeric`. To use this dataset we will cast (convert) it to a time series object `ts_solar_irraditation`.
+
+```{r casting-2-ts}
+
+ts_solar_irradiation <- ts(solar_irradiation[,-1], frequency = 365.25 , start = c(1994,1,1)) # using tseries
+#ts(solar_irradiation$ACME, frequency = 365, start = c(1994,1,1), end = c(2007,12,31))
+
+```
+
+## Time series main properties
+
+Below we can observe the time series of all mesonets.
+
+```{r ts-acme-plot}
+
+#autoplot(ts_solar_irradiation)
+autoplot(ts_solar_irradiation[,1])
+
+```
+
+
+Lets examine how related are the successive observations (known as lags) for the ACME series. Below we present the lag plots for one (lag1) and 3 (lag 1-3).
+
+```{r lag1-plot}
+
+gglagplot(ts_solar_irradiation[,1], lags=1, do.lines=F)
+
+```
+
+```{r lag3-plot}
+
+gglagplot(ts_solar_irradiation[,1], lags=3, do.lines=F)
+
+```
+
+Below we present an EDA summary for the ACME series. In the future, this will be refer as the `finger print`. On the top part of the graph (shown below), we can observe the time series (ACME). Below it, we can observe the autocorrelation (left) and the partial autocorrelation (rigth).
+
+```{r finger-print}
+
+ggtsdisplay(ts_solar_irradiation[,1])
+
+```
+
+As describe in [Forecasting: Principles and Practice](https://otexts.com/fpp2/), autocorrelation "autocorrelation measures the linear relationship between lagged values of a time series."
+In the correlogram (graph corresponding to the ACF) we can observe the following:  
+- All lags have correlations that are significantly different from zero (see blue dashed lines).  
+- There are positive and negative correlations. 
+- Clearly defined peaks and valleys (which can also be described as having a “scalloped” shape according to Rob J. Hyndman in [Forecasting: Principles and Practice](https://otexts.com/fpp2/)) caused the seasonality.
+- There is a small and slow decrease in the ACF as the lags increase (figure below). This is due to the trend.
+
+
+```{r acf-plot-acme}
+
+ggAcf(ts_solar_irradiation[,1], lag.max = 90)
+
+```
+
+For explanation about the PACF please check this [book](https://otexts.com/fpp2/).
+
+
+# Time series forecasting
+
+In terms of data splitting, we haven't splitted the data into train and test sets. It is possible that by using all the data available our model(s) have learned too well the interactions leading to overfitting. However, our knowledge on time series is limited in how to best approach this problem.
+
+Concerning hyper-parameters, we have not modified any hyper-parameter for the models that we have used. Again, we do not fully understand how to modify these hyper-parameters in order to improve the outcome.
+
+We have implemented several methods to predict the 1796 values (requested in the kaggle competition). These methods are introduced below.
+- ETS  
+- ARIMA  
+- NAIVE  
+- RWDRIFT  
+
+We used stl (Seasonal and Trend decomposition using Loess) and stlf (Seasonal and Trend decomposition forecasting) decomposition techniques.
+
+The best result we obtained (based on MAE) was for NAIVE.
+
+Below we provide the code of our best model. 
+
+```{r forecast-code, include=TRUE}
+tsdata_test <- ts(solar_irradiation[,-1], frequency = 365.25 ,start = c(1994,1,1))
+
+prediction <- solar[5114:6909,1]
+prediction <- as.data.table(prediction)
+colnames(prediction) <- "Date"
+prediction$Date <- as.Date.character(prediction$Date, format = c("%Y%m%d"));
+
+for (i in 1:98){
+  tsdata2 <- window(tsdata_test[,i], start = 1994)
+  fcast2 <- stlf(tsdata2, method='naive', h=1796)
+  ts_dt_forecast <- as.data.table(summary(fcast2)[,1])
+  prediction <- cbind(prediction, ts_dt_forecast)
+}
+
+colnames(prediction) <- colnames(solar_irradiation)
+
+write.csv(prediction,"/Users/erivero/Documents/MBD\ IE/t1/R\ PROGRAMMING/solar_energy_forecasting/prediction.csv", row.names = FALSE)
+```
+
+
+```{r forecast-plot}
+tsdata2 <- window(tsdata_test[,1], start = 1994)
+fcast_acme <- stlf(tsdata2, method='naive', h=1796)
+autoplot(fcast5) + ggtitle("Forecast ACME") +
+  xlab("Year") + ylab("Irradiation")
+```
+
+
+# Annex I {#annex-1}
+
+This section list libraries we used in the realization of this project.
+
+
+## For data manipulation
+
+[data.table](http://127.0.0.1:32237/help/library/data.table/doc/datatable-intro.html)
+
+
+[dplyr](https://dplyr.tidyverse.org)  
+Provides a consistent set of verbs (mutate, select, filter, ...) that help you solve the most common data manipulation challenges.
+
+
+[Amelia](https://cran.r-project.org/web/packages/Amelia/index.html)  
+A program for missing data
+
+## For reporting
+
+[knitr](https://yihui.org/knitr/)  
+Elegant, flexible, and fast dynamic report generation with R
+
+
+## For tables
+
+kable and kableExtra ([link](https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html#Table_Styles))  
+We used these libraries to create awesome HTML tables.
+
+## For data exploration
+
+[DataExplorer](https://cran.r-project.org/web/packages/DataExplorer/index.html)  
+This library supports in the scan, analysis and visualization of variables.
+
+[dlookr](https://cran.r-project.org/web/packages/dlookr/index.html)  
+Supports data diagnosis, exploration, and transformation.
+
+
+## For mapping
+
+[leaflet](https://rstudio.github.io/leaflet/)  
+Provides support in the creation of interactive maps.
+
+
+## For statistical reporting
+
+[papeR](https://cran.r-project.org/web/packages/papeR/vignettes/papeR_introduction.html)  
+We used this library to handle variable labels and to create (complex) summary tables. 
+
+
+## For plots
+
+[ggplot2](https://ggplot2.tidyverse.org)  
+For graphics creation
+
+
+[scales](https://www.rdocumentation.org/packages/scales/versions/0.4.1)
+Graphical scales map data to aesthetics, and provide methods for automatically determining breaks and labels for axes and legends.
+
+
+gtable, grid, egg, gridExtra ([link](https://cran.r-project.org/web/packages/egg/vignettes/Ecosystem.html))  
+Used to layout multiple plots in a page. See explanation in link.
+
+
+[corrplot](https://cran.r-project.org/web/packages/corrplot/vignettes/corrplot-intro.html)  
+To display a graphical correlation matrix (correlation plot) for fast data understanding.
+
+
+[RColorBrewer](https://www.rdocumentation.org/packages/RColorBrewer/versions/1.1-2/topics/RColorBrewer)  
+Provides nice looking color palettes
+
+
+[Factoextra](http://www.sthda.com/english/wiki/factoextra-r-package-easy-multivariate-data-analyses-and-elegant-visualization)  
+Visualization of multivariate data analysis results
+
+
+## For prediction
+
+[caret](https://topepo.github.io/caret/)  
+Streamsline the process for creating predictive models
+
+
+[forecast](https://cran.r-project.org/web/packages/forecast/forecast.pdf)  
+Forecasting functions for time series and linear models
+
+
+## For time series
+
+[tseries](https://cran.r-project.org/web/packages/tseries/index.html)  
+Time series analysis
+
+# Annex II {#annex-2}
+
+This section list useful links used in the realization of this project.
+
+For EDA: 
+[data explorer](https://rpubs.com/mark_sch7/DataExplorerPackage)
+
+For plotting: 
+[ablines](http://www.sthda.com/english/wiki/abline-r-function-an-easy-way-to-add-straight-lines-to-a-plot-using-r-software), 
+[ggplot](https://datacarpentry.org/R-ecology-lesson/04-visualization-ggplot2.html), 
+[ggplot2](https://lgatto.github.io/2017_11_09_Rcourse_Jena/data-visualization-with-ggplot2.html), 
+[ggplot3](https://www.datanovia.com/en/blog/ggplot-axis-labels/)
+
+For RMarkdown: 
+[cross-referencing](https://ulyngs.github.io/oxforddown/cites-and-refs.html#cross-referencing), 
+[notebook](https://bookdown.org/yihui/rmarkdown/notebook.html), 
+[notebook2](http://uc-r.github.io/r_notebook)
+
+For time series: 
+[fpp2](https://cran.r-project.org/web/packages/fpp2/index.html)
+
+For machine learning: 
+[mlbench](https://www.rdocumentation.org/packages/mlbench/versions/2.1-1)
+
+For dimentionality reduction: 
+[PCA](http://www.sthda.com/english/articles/31-principal-component-methods-in-r-practical-guide/118-principal-component-analysis-in-r-prcomp-vs-princomp/)
+
+For solving issues in respect to compilers: 
+[solution for installing Amelia](https://github.com/immunogenomics/harmony/issues/113)
+
+For understanding the state of r packages for data exploration
+[article](https://arxiv.org/pdf/1904.02101.pdf)
